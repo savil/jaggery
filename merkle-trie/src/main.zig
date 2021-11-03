@@ -10,10 +10,12 @@ const merkleTrie = struct {
     const hasher = std.crypto.hash.blake2.Blake2b256;
 
     values: std.ArrayList([hasher.digest_length]u8),
+    num_items: u64,
 
     pub fn init(allocator: *Allocator) Self {
         return Self{
             .values = std.ArrayList([hasher.digest_length]u8).init(allocator),
+            .num_items = 0,
         };
     }
 
@@ -25,8 +27,7 @@ const merkleTrie = struct {
     /// but is simpler for me to reason about :-). Optimizations can be made later
     /// once this works.
     pub fn commit(self: *Self, dataAry: [] const []const u8) !void {
-        _ = self;
-        _ = dataAry;
+        self.num_items = dataAry.len;
 
         for (dataAry) |datum| {
             var hashed_datum: [hasher.digest_length]u8 = undefined;
@@ -36,9 +37,9 @@ const merkleTrie = struct {
         try self.ensureValuesLengthIsPowerOfTwo();
 
 
-        var level_start_idx: u64 = 0;
-        var level_idx: u64 = 0;
-        var level_len: u64 = self.values.items.len;
+        var level_start_idx: usize = 0;
+        var level_idx: usize = 0;
+        var level_len: usize = self.values.items.len;
         while (level_len >= 2) {
             while (level_idx < level_len) {
                 var current_idx = level_start_idx + level_idx;
@@ -58,7 +59,8 @@ const merkleTrie = struct {
         }
     }
 
-    pub fn open() void {
+    pub fn open(idx: u64) void {
+        _ = idx;
 
     }
 
@@ -66,10 +68,10 @@ const merkleTrie = struct {
 
     }
 
-    fn copyToBuf(self: *Self, cp_idx: u64) []const u8 {
+    fn copyToBuf(self: *Self, cp_idx: usize) []const u8 {
 
         var buf: [2* hasher.digest_length] u8 = undefined;
-        var idx: u64 = 0;
+        var idx: usize = 0;
         for (self.values.items[cp_idx]) | char | {
             buf[idx] = char;
             idx += 1;
