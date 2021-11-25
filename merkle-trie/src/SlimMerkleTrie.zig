@@ -24,11 +24,14 @@ const SlimMerkleTrie = struct {
         }
     }   
 
+    /// commit will compute the merkle root of the given array.
+    /// This root is the vector-commitment.
     pub fn commit (self: *Self, data_ary: [] const [] const u8) !?[hasher.digest_length]u8 {
-        self.values = try self.allocator.alloc(
-            [hasher.digest_length]u8, 
-            data_ary.len,
-        );
+        if (data_ary.len == 0) {
+            return null;
+        }
+
+        self.values = try self.allocator.alloc([hasher.digest_length]u8, data_ary.len);
 
         // Hash the provided values and store them in self.values
         for (data_ary) |datum, idx| {
@@ -36,21 +39,13 @@ const SlimMerkleTrie = struct {
             hasher.hash(datum, &hashed_datum, .{});
             self.values.?[idx] = hashed_datum; 
         }
-
-        var pad = try self.allocator.alloc(
-            [hasher.digest_length]u8,
-            hasher.digest_length * data_ary.len, // can be divided by 2
-        );
+        
+        // can be divided by 2
+        var pad = try self.allocator.alloc([hasher.digest_length]u8, self.values.?.len);
         defer self.allocator.free(pad);
 
         // copy over the values. use std.mem.copy instead?
-        for (self.values.?) | value, idx | {
-            pad[idx] = value;
-        }
-
-        if (pad.len <= 0) {
-            return null;
-        }
+        std.mem.copy([hasher.digest_length]u8, pad, self.values.?);
 
         // loop over the pad. Each loop represents processing a level
         // in the binary tree. Stop when the last-level of len == 1 is written to.
@@ -70,26 +65,21 @@ const SlimMerkleTrie = struct {
         return pad[0];
     }
 
+    /// open will return the authenticated-path of a given leaf of the merkle tree
+    /// at target_idx
+    ///
+    /// the caller is responsible for freeing the path returned
     pub fn open(self: *Self, target_idx: usize) ![][hasher.digest_length]u8 {
 
+
         if (target_idx >= self.values.?.len) {
-            // return error
+            // TODO return error
         }
 
-        var pad = try self.allocator.alloc(
-            [hasher.digest_length]u8,
-            self.values.?.len, 
-        );
+        var pad = try self.allocator.alloc([hasher.digest_length]u8, self.values.?.len);
         defer self.allocator.free(pad);
 
-        // copy over the values. use std.mem.copy instead?
-        for (self.values.?) | value, idx | {
-            pad[idx] = value;
-        }
-
-        if (pad.len <= 0) {
-            // return error
-        }
+        std.mem.copy([hasher.digest_length]u8, pad, self.values.?);
 
         var path = try self.allocator.alloc(
             [hasher.digest_length]u8, 
@@ -102,23 +92,37 @@ const SlimMerkleTrie = struct {
         var cur_idx = target_idx;
         var len = pad.len;        // length of the level
 
-        std.debug.print("len is {}, cur_idx {}, path_idx {}", .{len, cur_idx, path_idx});
+        std.debug.print("len {}, cur_idx {}\n", .{len, cur_idx});
         while (len > 1) {
+            //
+            // First, write the authenticating-neighbour into the path
+            //
+
+            // to_path_idx is the index of the element in pad 
+            // which is the authenticating-neighbour of the target-branch's node.
+            var to_path_idx = if (cur_idx % 2 == 0) cur_idx + 1 else cur_idx - 1;
+
+            // if to_path_idx is beyond the length-of-the-level, then we may need 
+            // to clone the last element (else-case). This happens when it is not
+            // a balanced tree.
+            path[path_idx] = if (to_path_idx < len)
+                    pad[to_path_idx]
+                else
+                    pad[to_path_idx - 1];
+            path_idx += 1;
+            // divide cur_idx by 2 to map it to the next level
+            cur_idx = cur_idx >> 1; 
+
+            //
+            // Second, write to pad the next level of the binary tree
+            //
             var read_idx: usize = 0; 
             var write_idx: usize = 0; 
-
             while (read_idx < len) {
                 pad[write_idx] = hashAdjacent(pad, read_idx, len);
                 read_idx += 2;
                 write_idx += 1;
             }
-
-            var to_path_idx = if (cur_idx % 2 == 0) cur_idx + 1 else cur_idx - 1;
-            cur_idx = try std.math.divTrunc(@TypeOf(cur_idx), cur_idx, 2);
-
-            path[path_idx] = pad[to_path_idx]; // if (to_path_idx < len) pad[to_path_idx] else path[to_path_idx - 1];
-            path_idx += 1;
-
             len = write_idx;
         }
 
@@ -127,19 +131,49 @@ const SlimMerkleTrie = struct {
         return path;
     }
 
+    /// verify accepts the target value, target_idx and the path. Using these, it will
+    /// walk up the branch from the target to the root and re-calculate the root.
+    ///
+    /// Finally, it will verify that its calculated root is the same as the root passed in.
+    ///
+    /// Why? This verifies that a given leaf (target value) is an element of the
+    /// committed vector (root) at the given index (target_idx)
     pub fn verify(
         self: *Self, 
         root: [hasher.digest_length]u8,
-        idx: usize,
+        _target_idx: usize,
         path: [][hasher.digest_length]u8,
         target: []const u8,
-    ) bool {
-        _ = self;
-        _ = root;
-        _ = idx;
-        _ = path;
-        _ = target;
-        return false;
+    ) !bool {
+        var target_idx = _target_idx;
+
+        if (self.values.?.len <= 0) {
+            return false;
+        }
+        
+        var pad = try self.allocator.alloc([hasher.digest_length]u8, self.values.?.len);
+        defer self.allocator.free(pad);
+
+        std.mem.copy([hasher.digest_length]u8, pad, self.values.?);
+        
+        var target_hash: [hasher.digest_length]u8 = undefined;
+        hasher.hash(target, &target_hash, .{});
+
+        var path_idx: usize = 0;
+        while (path_idx < path.len) {
+            var path_val = path[path_idx];
+    
+            var buf = if (target_idx % 2 == 0) 
+                    copyToBuf(target_hash, path_val) 
+                else 
+                    copyToBuf(path_val, target_hash);
+            hasher.hash(buf[0..], &target_hash, .{});
+
+            target_idx = target_idx >> 1; // divide by 2
+            path_idx += 1;
+        }
+
+        return std.mem.eql(u8, root[0..], target_hash[0..]);
     }
 
     fn hashAdjacent(pad: [][hasher.digest_length]u8, read_idx: usize, len: usize) [hasher.digest_length]u8 {
@@ -187,6 +221,27 @@ test "size-one merkle trie" {
     try doTest(data_ary[0..], 0, 0);
 }
 
+test "size-two merkle trie" {
+    const data_ary = [_][]const u8{"asterix", "getafix"};
+    try doTest(data_ary[0..], 0, 1);
+    try doTest(data_ary[0..], 1, 1);
+}
+
+test "size-three merkle trie" {
+    const data_ary = [_][]const u8{"asterix", "getafix", "obelix"};
+    try doTest(data_ary[0..], 0, 2);
+    try doTest(data_ary[0..], 1, 2);
+    try doTest(data_ary[0..], 2, 2);
+}
+
+test "size-four merkle trie" {
+    const data_ary = [_][]const u8{"asterix", "getafix", "obelix", "cacofonix"};
+    try doTest(data_ary[0..], 0, 2);
+    try doTest(data_ary[0..], 1, 2);
+    try doTest(data_ary[0..], 2, 2);
+    try doTest(data_ary[0..], 3, 2);
+}
+
 fn doTest(data_ary: []const []const u8, idx: usize, path_len: usize) anyerror!void { 
     var m = SlimMerkleTrie.init(testing.allocator);
     defer m.deinit();
@@ -195,8 +250,9 @@ fn doTest(data_ary: []const []const u8, idx: usize, path_len: usize) anyerror!vo
     try std.testing.expect(root != null);
 
     var path = try m.open(idx);
+    defer testing.allocator.free(path);
     try std.testing.expect(path.len == path_len);
 
-    var is_valid = m.verify(root.?, idx, path, data_ary[idx]);
+    var is_valid = try m.verify(root.?, idx, path, data_ary[idx]);
     try std.testing.expect(is_valid);
 }

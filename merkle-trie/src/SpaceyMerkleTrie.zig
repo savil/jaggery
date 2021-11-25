@@ -118,6 +118,12 @@ const SpaceyMerkleTrie = struct {
         return path;
     }
 
+    /// verify accepts the path, target value and the idx of the target. It will
+    /// walk up the tree from the target element, while calculating the 
+    /// branch of hashes to the root.
+    ///
+    /// Finally, it will compare the provided root-hash with the calculated root-hash
+    /// to verify correctness.
     pub fn verify(
         self: *Self,
         root: [hasher.digest_length]u8, 
