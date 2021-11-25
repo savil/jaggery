@@ -27,7 +27,7 @@ const SlimMerkleTrie = struct {
     pub fn commit (self: *Self, data_ary: [] const [] const u8) !?[hasher.digest_length]u8 {
         self.values = try self.allocator.alloc(
             [hasher.digest_length]u8, 
-            hasher.digest_length * data_ary.len,
+            data_ary.len,
         );
 
         // Hash the provided values and store them in self.values
@@ -70,11 +70,61 @@ const SlimMerkleTrie = struct {
         return pad[0];
     }
 
-    pub fn open(self: *Self, idx: usize) ![][hasher.digest_length]u8 {
-        _ = self;
-        _ = idx;
+    pub fn open(self: *Self, target_idx: usize) ![][hasher.digest_length]u8 {
+
+        if (target_idx >= self.values.?.len) {
+            // return error
+        }
+
+        var pad = try self.allocator.alloc(
+            [hasher.digest_length]u8,
+            self.values.?.len, 
+        );
+        defer self.allocator.free(pad);
+
+        // copy over the values. use std.mem.copy instead?
+        for (self.values.?) | value, idx | {
+            pad[idx] = value;
+        }
+
+        if (pad.len <= 0) {
+            // return error
+        }
+
+        var path = try self.allocator.alloc(
+            [hasher.digest_length]u8, 
+            std.math.log2_int_ceil(usize, self.values.?.len) + 1,
+        );
+        var path_idx: usize = 0;
+
+        // loop over the pad. Each loop represents processing a level
+        // in the binary tree. Stop when the last-level of len == 1 is written to.
+        var cur_idx = target_idx;
+        var len = pad.len;        // length of the level
+
+        std.debug.print("len is {}, cur_idx {}, path_idx {}", .{len, cur_idx, path_idx});
+        while (len > 1) {
+            var read_idx: usize = 0; 
+            var write_idx: usize = 0; 
+
+            while (read_idx < len) {
+                pad[write_idx] = hashAdjacent(pad, read_idx, len);
+                read_idx += 2;
+                write_idx += 1;
+            }
+
+            var to_path_idx = if (cur_idx % 2 == 0) cur_idx + 1 else cur_idx - 1;
+            cur_idx = try std.math.divTrunc(@TypeOf(cur_idx), cur_idx, 2);
+
+            path[path_idx] = pad[to_path_idx]; // if (to_path_idx < len) pad[to_path_idx] else path[to_path_idx - 1];
+            path_idx += 1;
+
+            len = write_idx;
+        }
+
         
-        return undefined;
+        path = self.allocator.shrink(path, path_idx);
+        return path;
     }
 
     pub fn verify(
