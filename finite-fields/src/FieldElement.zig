@@ -2,7 +2,7 @@ const std = @import("std");
 
 /// This file has FieldElement and Fields.
 
-const FieldElement = struct {
+pub const FieldElement = struct {
     const Self = @This();
 
     const TValue = i64;
