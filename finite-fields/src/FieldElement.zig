@@ -1,11 +1,12 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 /// This file has FieldElement and Fields.
 
 const FieldElement = struct {
     const Self = @This();
 
-    const TValue = i64;
+    const TValue = i256;
 
     value: TValue,
     field: Field,
@@ -77,8 +78,6 @@ const FieldElement = struct {
     pub fn isZero(self: Self) bool {
         return self.value == 0;
     }
-
-
 
 };
 
@@ -212,10 +211,14 @@ test "exponentiating field elements" {
 
 pub const Field = struct {
     const Self = @This();
+    const GENERATOR_VALUE: FieldElement.TValue = 85408008396924667383611388730472331217;
 
-    prime: i64,
+    const TPrime = i256;
 
-    pub fn init(prime: i64) Self {
+    prime: TPrime,
+
+
+    pub fn init(prime: TPrime) Self {
         return Self {
             .prime = prime,
         };
@@ -264,7 +267,32 @@ pub const Field = struct {
         var result = try xgcd(@intCast(i64, right.value), @intCast(i64, self.prime));
         return FieldElement.init((left.value * @intCast(u64, result.a)) % self.p, self);
     }
+
+    pub fn generator(self: Self) FieldElement {
+        assert(self.prime == 1 + 407 * ( 1 << 119 )); // , "Do not know generator for other fields beyond 1+407*2^119");
+        return FieldElement.init(Field.GENERATOR_VALUE, self);
+    }
+
+    pub fn primitiveNthRoot(self: Self, n: i64) FieldElement {
+        assert(self.prime == 1 + 407 * ( 1 << 119 )); //, "Cannot return root of unity for unknown field");
+        assert(n <= (1 << 119)); //  "Field does not have nth root of unity where n > 2^119.");
+        assert((n & (n-1)) == 0); // "Field does not have nth root of unity where n is not power of two.");
+        var root = FieldElement(85408008396924667383611388730472331217, self);
+        var order = 1 << 119;
+        while (order != n) {
+            root = root^2;
+            order = order/2;
+        }
+        return root;
+    }
 };
+
+
+test "generator for field elements" {
+    var field = Field.init(1 + 407 * ( 1 << 119));
+
+    try std.testing.expectEqual(Field.GENERATOR_VALUE, field.generator().value);
+}
 
 /// xgcd is the extended euclidean algorithm for computing multiplicative inverses:
 /// for input a and b, returns their greatest common divisor g, 
