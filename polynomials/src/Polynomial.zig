@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const Allocator = std.mem.Allocator;
 // TODO savil. Should this import the library instead of the file?
 // TODO savil. Rename FieldElement.zig to FiniteFields.zig?
 const FiniteFields = @import("finite-fields");
@@ -10,12 +11,76 @@ const Field = FiniteFields.Field;
 const Polynomial = struct {
     const Self = @This();
 
-    coefficients: []const FieldElement,
+    allocator: *const Allocator,
+    coefficients: []FieldElement,
+    
+    // TODO savil: we need an allocator to store the coefficients in the heap
+    pub fn init(allocator: *const Allocator, coefficients: []const FieldElement) !Self {
+        // make internal copy of coefficients since we own it now
+        var coeffs = try allocator.alloc(FieldElement, coefficients.len);
+        std.mem.copy(FieldElement, coeffs[0..], coefficients[0..]);
 
-    pub fn init(coefficients: []const FieldElement) Self {
         return Self {
-            .coefficients = coefficients,
+            .allocator = allocator,
+            .coefficients = coeffs,
         };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.allocator.free(self.coefficients);
+    }
+
+    fn degree(self: Self) ?usize {
+        if (self.coefficients.len == 0) {
+            return null;
+        }
+
+        var all_zeros = true;
+        for (self.coefficients) | coeff | {
+            if (!coeff.isZero()) {
+                all_zeros = false;
+            }
+        }
+        if (all_zeros) {
+            return null;
+        }
+
+        var maxIndex: usize = 0;
+        for (self.coefficients) | coeff, idx | {
+            if (!coeff.isZero()) {
+                maxIndex = idx;
+            }
+        }
+        return maxIndex; 
+    }
+
+    fn neg(self: *Self) *Self {
+        for (self.coefficients) | coeff, idx | {
+            self.coefficients[idx] = coeff.neg();
+        }
+        return self;
+    }
+
+    // add appends the coefficients of other onto the coefficients of add.
+    fn add(self: *Self, other: *const Polynomial) !*Self {
+
+        if (other.degree() == null) {
+            return self;
+        }
+
+        const combined_len = std.math.max(self.coefficients.len, other.coefficients.len);
+        const coeffs = try self.allocator.alloc(FieldElement, combined_len);
+        std.mem.copy(FieldElement, coeffs[0..], self.coefficients);
+        for (other.coefficients) | coeff, idx | {
+            if (idx < self.coefficients.len) {
+                coeffs[idx] = coeffs[idx].add(coeff);
+            } else {
+                coeffs[idx] = coeff;
+            }
+        }
+        self.allocator.free(self.coefficients);
+        self.coefficients = coeffs;
+        return self;
     }
 };
 
@@ -23,9 +88,100 @@ test "init polynomial" {
     const field = Field.init(19);
     const fe = FieldElement.init(2, field);
     const fes = [_]FieldElement{fe};
-    const polynomial = Polynomial.init(fes[0..]);
+    const polynomial = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial.deinit();
 
     _ = polynomial;
     try testing.expect(true); // just want the above to compile.
 }
 
+test "degrees-zero-len" {
+    const fes = [_]FieldElement{};
+    const polynomial = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial.deinit();
+    try testing.expect(polynomial.degree() == null);
+}
+
+test "degrees-all-zeros" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(0, field);
+    const fes = [_]FieldElement{fe1, fe2};
+    const polynomial = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial.deinit();
+    try testing.expect(polynomial.degree() == null);
+}
+
+test "degrees-max-index" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fe3 = FieldElement.init(0, field);
+    const fe4 = FieldElement.init(5, field);
+    const fe5 = FieldElement.init(0, field);
+    const fes = [_]FieldElement{fe1, fe2, fe3, fe4, fe5};
+    const polynomial = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial.deinit();
+    try testing.expect(polynomial.degree().? == 3);
+}
+
+test "neg" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2};
+    var polynomial = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial.deinit();
+
+    _ = polynomial.neg();
+    try testing.expect(polynomial.degree().? == 1);
+    try testing.expect(polynomial.coefficients[1].eq(fe2.neg()));
+}
+
+test "add empty" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+
+    try testing.expect(polynomial1.degree().? == 1);
+
+    var polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.degree() == null);
+
+    // add empty-polynomial to polynomial1. Ensure polynomial1 is same.
+    _ = try polynomial1.add(&polynomial2);
+    try testing.expect(polynomial1.degree().? == 1);
+    try testing.expect(polynomial1.coefficients[0].eq(fe1));
+    try testing.expect(polynomial1.coefficients[1].eq(fe2));
+
+    // add polynomial1 to the empty-polynomial. Now, polynomial2 is no longer empty.
+    _ = try polynomial2.add(&polynomial1);
+    try testing.expect(polynomial2.degree().? == 1);
+    try testing.expect(polynomial2.coefficients[0].eq(fe1));
+    try testing.expect(polynomial2.coefficients[1].eq(fe2));
+}
+
+test "add" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+
+    try testing.expect(polynomial1.degree().? == 2);
+
+    const polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe1, fe2});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.degree().? == 2);
+    
+    _ = try polynomial1.add(&polynomial2);
+    try testing.expect(polynomial1.degree().? == 2);
+    try testing.expect(polynomial1.coefficients[0].eq(fe2));
+    try testing.expect(polynomial1.coefficients[1].eq(fe2));
+    try testing.expect(polynomial1.coefficients[2].eq(FieldElement.init(6, field)));
+}

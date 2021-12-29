@@ -62,11 +62,11 @@ pub const FieldElement = struct {
         return result;
     }
 
-    pub fn eq(self: Self, other: FieldElement) FieldElement {
+    pub fn eq(self: Self, other: FieldElement) bool {
         return self.value == other.value;
     }
 
-    pub fn neq(self: Self, other: FieldElement) FieldElement {
+    pub fn neq(self: Self, other: FieldElement) bool {
         return self.value != other.value;
     }
 
