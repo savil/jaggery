@@ -82,6 +82,12 @@ const Polynomial = struct {
         self.coefficients = coeffs;
         return self;
     }
+
+    fn sub(self: *Self, other: *const Polynomial) !*Self {
+        var other2 = try Polynomial.init(self.allocator, other.coefficients);
+        defer other2.deinit();
+        return try self.add(other2.neg());
+    }
 };
 
 test "init polynomial" {
@@ -185,3 +191,22 @@ test "add" {
     try testing.expect(polynomial1.coefficients[1].eq(fe2));
     try testing.expect(polynomial1.coefficients[2].eq(FieldElement.init(6, field)));
 }
+
+test "sub" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+
+    try testing.expect(polynomial1.degree().? == 2);
+
+    const polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe1, fe2});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.degree().? == 2);
+    
+    _ = try polynomial1.sub(&polynomial2);
+    try testing.expect(polynomial1.degree().? == 1);
+}
+
