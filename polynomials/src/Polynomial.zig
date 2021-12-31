@@ -88,6 +88,31 @@ const Polynomial = struct {
         defer other2.deinit();
         return try self.add(other2.neg());
     }
+
+    fn mul(self: *Self, other: *const Polynomial) !*Self {
+        if ((self.coefficients.len == 0) or (other.coefficients.len == 0)) {
+            var buf = try self.allocator.alloc(FieldElement, 0);
+            self.allocator.free(self.coefficients);
+            self.coefficients = buf;
+            return self;
+        }
+
+        const buf_size = self.coefficients.len + other.coefficients.len - 1;
+        var buf = try self.allocator.alloc(FieldElement, buf_size);
+        for (buf) | _, idx | {
+            buf[idx] = self.coefficients[0].field.zero();
+        }
+
+        for (self.coefficients) | self_coeff, i | {
+            for (other.coefficients) | other_coeff, j | {
+                buf[i + j] = buf[i + j].add(self_coeff.mul(other_coeff));
+            }
+        }
+
+        self.allocator.free(self.coefficients);
+        self.coefficients = buf;
+        return self;
+    }
 };
 
 test "init polynomial" {
@@ -210,3 +235,45 @@ test "sub" {
     try testing.expect(polynomial1.degree().? == 1);
 }
 
+test "mul" {
+
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+
+    try testing.expect(polynomial1.degree().? == 2);
+
+    const polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe1, fe2});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.degree().? == 2);
+
+    _ = try polynomial1.mul(&polynomial2);
+    try testing.expect(polynomial1.degree().? == 4);
+}
+
+test "mul empty" {
+
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+
+    try testing.expect(polynomial1.degree().? == 2);
+
+    var polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.degree() == null);
+    
+    _ = try polynomial2.mul(&polynomial1);
+    try testing.expect(polynomial2.degree() == null);
+    try testing.expect(polynomial1.degree().? == 2);
+
+    _ = try polynomial1.mul(&polynomial2);
+    try testing.expect(polynomial1.degree() == null);
+    try testing.expect(polynomial2.degree() == null);
+}
