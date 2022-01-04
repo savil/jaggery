@@ -113,6 +113,27 @@ const Polynomial = struct {
         self.coefficients = buf;
         return self;
     }
+
+    fn eq(self: *Self, other: *const Polynomial) bool {
+        const self_degree = self.degree();
+        const other_degree = other.degree();
+        if (self_degree == null and other_degree == null) {
+            return true;
+        }
+        if (self_degree == null or other_degree == null) {
+            return false;
+        }
+        if (self_degree.? != other_degree.?) {
+            return false;
+        }
+
+        for (self.coefficients) | self_coeff, idx | {
+            if (!self_coeff.eq(other.coefficients[idx])) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 test "init polynomial" {
@@ -276,4 +297,50 @@ test "mul empty" {
     _ = try polynomial1.mul(&polynomial2);
     try testing.expect(polynomial1.degree() == null);
     try testing.expect(polynomial2.degree() == null);
+}
+
+test "eq - both empty" {
+    // First, make both polynomials empty
+    var polynomial1 = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polynomial1.deinit();
+    try testing.expect(polynomial1.degree() == null);
+
+    var polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.degree() == null);
+
+    try testing.expect(polynomial1.eq(&polynomial2));
+}
+
+test "eq - one empty" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+
+    try testing.expect(polynomial1.degree().? == 2);
+
+    var polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.degree() == null);
+
+    try testing.expect(!polynomial1.eq(&polynomial2));
+
+    try testing.expect(!polynomial2.eq(&polynomial1));
+}
+
+test "eq - both equal" {
+
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+
+    var polynomial2 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial2.deinit();
+    try testing.expect(polynomial1.eq(&polynomial2));
 }
