@@ -138,6 +138,18 @@ const Polynomial = struct {
     fn neq(self: *Self, other: *const Polynomial) bool {
         return !self.eq(other);
     }
+
+    fn isZero(self: *Self) bool {
+        return self.degree() == null;
+    }
+
+    fn leadingCoefficient(self: *Self) ?FieldElement {
+        const d = self.degree();
+        if (d == null) {
+            return null;
+        }
+        return self.coefficients[d.?];
+    }
 };
 
 test "init polynomial" {
@@ -347,4 +359,34 @@ test "eq - both equal" {
     var polynomial2 = try Polynomial.init(&testing.allocator, fes[0..]);
     defer polynomial2.deinit();
     try testing.expect(polynomial1.eq(&polynomial2));
+}
+
+test "isZero" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe2};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+    try testing.expect(!polynomial1.isZero());
+
+    var polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.isZero());
+}
+
+test "leadingCoefficient" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(0, field);
+    const fe2 = FieldElement.init(3, field);
+    const fes = [_]FieldElement{fe1, fe2, fe1};
+    var polynomial1 = try Polynomial.init(&testing.allocator, fes[0..]);
+    defer polynomial1.deinit();
+    try testing.expect(!polynomial1.isZero());
+    try testing.expect(polynomial1.leadingCoefficient().?.eq(fe2));
+
+    var polynomial2 = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polynomial2.deinit();
+    try testing.expect(polynomial2.isZero());
+    try testing.expect(polynomial2.leadingCoefficient() == null);
 }
