@@ -134,6 +134,10 @@ const Polynomial = struct {
         }
         return true;
     }
+
+    fn neq(self: *Self, other: *const Polynomial) bool {
+        return !self.eq(other);
+    }
 };
 
 test "init polynomial" {
@@ -326,9 +330,9 @@ test "eq - one empty" {
     defer polynomial2.deinit();
     try testing.expect(polynomial2.degree() == null);
 
-    try testing.expect(!polynomial1.eq(&polynomial2));
+    try testing.expect(polynomial1.neq(&polynomial2));
 
-    try testing.expect(!polynomial2.eq(&polynomial1));
+    try testing.expect(polynomial2.neq(&polynomial1));
 }
 
 test "eq - both equal" {
