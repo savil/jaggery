@@ -150,6 +150,44 @@ const Polynomial = struct {
         }
         return self.coefficients[d.?];
     }
+
+    // Almost certainly a faster way to do this.
+    fn exp(self: *Self, exponent: i64) !*Self { 
+        if (self.isZero()) {
+            var buf = try self.allocator.alloc(FieldElement, 0);
+            self.allocator.free(self.coefficients);
+            self.coefficients = buf;
+            return self;
+        }
+
+        var polyOne = try Polynomial.init(self.allocator, &[_]FieldElement{self.coefficients[0].field.one()});
+        defer polyOne.deinit();
+        var result = &polyOne;
+
+        var powOfTwo: i64 = 1;
+        var selfCopy = try Polynomial.init(self.allocator, self.coefficients); 
+        defer selfCopy.deinit();
+        var valuePowOfTwo = &selfCopy;
+
+        while (powOfTwo <= exponent) { 
+
+            if (powOfTwo & exponent == powOfTwo) {
+                result = try result.mul(valuePowOfTwo); 
+            }
+
+            valuePowOfTwo = try valuePowOfTwo.mul(valuePowOfTwo);
+
+            powOfTwo = powOfTwo << 1;
+        }
+
+        // Copy over the result coefficients into self. Can probably eliminate this copy
+        // by directly using self, instead of result.
+        self.allocator.free(self.coefficients);
+        self.coefficients = try self.allocator.alloc(FieldElement, result.coefficients.len);
+        std.mem.copy(FieldElement, self.coefficients, result.coefficients);
+
+        return self;
+    }
 };
 
 test "init polynomial" {
@@ -389,4 +427,57 @@ test "leadingCoefficient" {
     defer polynomial2.deinit();
     try testing.expect(polynomial2.isZero());
     try testing.expect(polynomial2.leadingCoefficient() == null);
+}
+
+test "exponential" {
+    const field = Field.init(19);
+    const fe1 = FieldElement.init(1, field);
+    const fe2 = FieldElement.init(2, field);
+    const fe3 = FieldElement.init(3, field);
+    const fe4 = FieldElement.init(4, field);
+    const fe5 = FieldElement.init(5, field);
+    const fe6 = FieldElement.init(6, field);
+    const fe8 = FieldElement.init(8, field);
+    const fe11 = FieldElement.init(11, field);
+    const fe17 = FieldElement.init(17, field);
+
+    var polynomial = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe5});
+    defer polynomial.deinit();
+
+    var test_poly1 = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe5});
+    defer test_poly1.deinit();
+
+    var exp0_poly = try test_poly1.exp(0);
+    // sanity test that the identical_polynomial was also changed.
+    try testing.expect(exp0_poly.eq(&test_poly1));
+    // not equal because polynomial is now field.one()
+    try testing.expect(exp0_poly.neq(&polynomial));
+
+    // Raise to the power of 1
+    try testExpHelper(&[_]FieldElement{fe2, fe5}, 1);    
+
+    // Raise to power of 2
+    try testExpHelper(&[_]FieldElement{fe4, fe1, fe6}, 2);
+
+    // Raise to power of 3 
+    //(5x+2)^3 = (25x^2 + 20x + 4)(5x+2) mod 19 = 125x^3+100x^2+20x+50x^2+40x+8 = 11x^3+5x^2+1x+12x^2+2x+8=11x^3+17x^2+3x+8
+    try testExpHelper(&[_]FieldElement{fe8, fe3, fe17, fe11}, 3);
+
+    // Raie to the power of 4   
+    // (11x^3+17x^2+3x+8)(5x+2) = feeling sleepy
+    //try testExpHelper(&[_]FieldElement{fe8, fe3, fe17, fe11}, 4);
+}
+
+fn testExpHelper(expected_coefficients: []FieldElement, exp: i64) !void {
+    const field = Field.init(19);
+    const fe2 = FieldElement.init(2, field);
+    const fe5 = FieldElement.init(5, field);
+
+    var test_poly3 = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe5});
+    defer test_poly3.deinit();
+    _ = try test_poly3.exp(exp);
+    
+    var expected_poly3 = try Polynomial.init(&testing.allocator, expected_coefficients);
+    defer expected_poly3.deinit();
+    try testing.expect(expected_poly3.eq(&test_poly3));
 }
