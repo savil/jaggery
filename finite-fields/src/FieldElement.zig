@@ -29,7 +29,7 @@ pub const FieldElement = struct {
         return self.field.subtract(self, right);
     }
 
-    pub fn div(self: Self, right: FieldElement) FieldElement {
+    pub fn div(self: Self, right: FieldElement) !FieldElement {
         return self.field.divide(self, right);
     }
 
@@ -126,6 +126,22 @@ test "multiply field elements" {
 
     // (5 * 3) % 7 == 15 % 7 == 1
     try std.testing.expectEqual(fe5.mul(fe3), fe1);
+}
+
+test "divide field elements" {
+    var field = Field.init(7);
+
+    //var fe0 = field.zero();
+    var fe1 = field.one();
+    var fe2 = FieldElement.init(2, field);
+    var fe3 = FieldElement.init(3, field);
+    var fe4 = FieldElement.init(4, field);
+    try std.testing.expectEqual(fe3.div(fe1), fe3);
+
+    try std.testing.expectEqual(fe4.div(fe2), fe2);
+
+    // TODO handle this
+    // try std.testing.expectError(error.DivisionByZero, fe4.div(fe0));
 }
 
 test "subtract field elements" {
@@ -260,9 +276,11 @@ pub const Field = struct {
         return FieldElement.init(result.a, self);
     }
 
+    // TODO handle division by zero and other edge cases
+    // see: https://www.geeksforgeeks.org/modular-division/
     pub fn divide(self: Self, left: FieldElement, right: FieldElement) !FieldElement {
         var result = try xgcd(@intCast(i64, right.value), @intCast(i64, self.prime));
-        return FieldElement.init((left.value * @intCast(u64, result.a)) % self.p, self);
+        return FieldElement.init(@mod((left.value * @intCast(i64, result.a)), self.prime), self);
     }
 };
 
