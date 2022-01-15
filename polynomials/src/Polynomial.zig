@@ -8,6 +8,17 @@ const FieldElement = FiniteFields.FieldElement;
 const Field = FiniteFields.Field;
 
 
+// TODO savil. If ziglang had varargs, then we could introduce this syntax for constructing
+// the coefficients of the polynomial which are an array of FieldElements.
+//
+// Right now, for a polynomial like 3x^2+4x+5, the elemenets in
+// `[]FieldElements{fe5, fe4, fe3}` are in reverse order. 
+// I'd much prefer the ergonomics of `coefficients(fe3, fe4, fe5)`.
+//
+// fn coefficients(...elems: FieldElement) []FieldElement {
+// }
+
+
 const Polynomial = struct {
     const Self = @This();
 
@@ -127,10 +138,13 @@ const Polynomial = struct {
             return false;
         }
 
-        for (self.coefficients) | self_coeff, idx | {
+        var idx: usize = 0;
+        while (idx <= self_degree.?) {
+            const self_coeff = self.coefficients[idx];
             if (!self_coeff.eq(other.coefficients[idx])) {
                 return false;
             }
+            idx += 1;
         }
         return true;
     }
@@ -188,7 +202,180 @@ const Polynomial = struct {
 
         return self;
     }
+
+    const divResult = struct {
+        quotient: Polynomial,
+        remainder: Polynomial,
+
+        fn init(q: Polynomial, r: Polynomial) divResult {
+            return divResult {
+                .quotient = q,
+                .remainder = r,
+            };
+        }
+
+        // for convenience in test cleanup
+        fn deinit(self: *divResult) void {
+            self.quotient.deinit();
+            self.remainder.deinit();
+        }
+
+        fn eq(self: *divResult, other: *const divResult) bool {
+            return self.quotient.eq(&other.quotient) and 
+                self.remainder.eq(&other.remainder);
+        }
+    };
+
+    /// NOTE: we place div as a static helper method
+    //
+    // This generally follows the division algorithm from school:
+    // keep dividing the dividend by the divisor, until the remainder's highest degree 
+    // is less than that of the divisor.
+    //
+    // ownership of the quotient and remainder is passed on to the caller.
+    fn div(allocator: *const Allocator, numerator: *Polynomial, denominator: *Polynomial) !?divResult {
+        var denom_degree = denominator.degree();
+        if (denom_degree == null) {
+            return null;
+        }
+        var num_degree = numerator.degree();
+        if (num_degree == null or num_degree.? < denom_degree.?) {
+            var emptyPoly = try Polynomial.init(allocator, &[_]FieldElement{});
+            // copy the numerator so that the caller owns the new value
+            return divResult.init(emptyPoly, try numerator.copy());
+        }
+
+        var field = denominator.coefficients[0].field;
+        var remainder = try Polynomial.init(allocator, numerator.coefficients);
+
+        var quotient_coeffs_size = num_degree.? - denom_degree.? + 1;
+        var quotient_coeffs = try allocator.alloc(FieldElement, quotient_coeffs_size);
+        defer allocator.free(quotient_coeffs);
+        std.mem.set(FieldElement, quotient_coeffs, field.zero());
+
+        var idx: usize = 0;
+        while (idx < quotient_coeffs_size): (idx += 1) {
+            const rem_degree = remainder.degree();
+            if (rem_degree == null or rem_degree.? < denom_degree.?) {
+                // The remainder's highest degree is less than the divisor's 
+                // highest degree, so we should stop here.
+                break;
+            }
+            
+            var coeff = try remainder.leadingCoefficient().?.div(denominator.leadingCoefficient().?);
+            var shift = rem_degree.? - denom_degree.?;
+            
+            // Initialize a subtractee polynomial whose leading coefficient
+            // is `coeff` and is of length `shift + 1`
+            var subtractee_coeffs = try allocator.alloc(FieldElement, shift + 1);
+            defer allocator.free(subtractee_coeffs);
+            std.mem.set(FieldElement, subtractee_coeffs, field.zero());
+            subtractee_coeffs[subtractee_coeffs.len - 1] = coeff;
+            var subtractee = &(try Polynomial.init(allocator, subtractee_coeffs));
+            defer subtractee.deinit();
+            // Finally, multiply the subtractee by the denominator (i.e. divisor)
+            subtractee = try subtractee.mul(denominator);
+            
+            quotient_coeffs[shift] = coeff;
+
+            _ = try remainder.sub(subtractee);
+        }
+
+        var quotient = try Polynomial.init(allocator, quotient_coeffs);
+        return divResult.init(quotient, remainder);
+    }
+
+    fn copy(self: *Self) !Polynomial {
+        return try Polynomial.init(self.allocator, self.coefficients);
+    }
 };
+
+// ugh, this is so ugly. Should:
+// 1. [easy] Refactor into a helper method that actually does the Polynomial.div 
+// 2. [harder] Improve the API so less cumbersome 
+test "div-empty" {
+    const emptyPoly = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{}));
+    defer emptyPoly.deinit();
+
+    var emptyPoly2 = &(try emptyPoly.copy());
+    defer emptyPoly2.deinit();
+
+    // Test Case: 0 / 0 = null
+    const divResult1 = try Polynomial.div(&testing.allocator, emptyPoly, emptyPoly2);
+    try testing.expectEqual(divResult1, null);
+}
+
+test "div-zero" {
+
+    const field = Field.init(19);
+    const fe1 = field.one();
+    const fe2 = FieldElement.init(2, field);
+    
+    const emptyPoly = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{}));
+    defer emptyPoly.deinit();
+
+    // Test Case: 0 / x + 2 = (quotient = 0, remainder = 0)
+    try testDivHelper(
+        &[_]FieldElement{}, // dividend
+        &[_]FieldElement{fe2, fe1}, // divisor
+        &[_]FieldElement{}, // quotient
+        &[_]FieldElement{}, // remainder
+    );
+}
+
+test "div-by-self" {
+    const field = Field.init(19);
+    const fe1 = field.one();
+
+    // Test case: x + 1 / x + 1 = (quotient = 0, remainder = 1)
+    try testDivHelper(
+        &[_]FieldElement{fe1, fe1}, // dividend
+        &[_]FieldElement{fe1, fe1}, // divisor
+        &[_]FieldElement{fe1}, // quotient
+        &[_]FieldElement{}, // remainder
+    );
+}
+
+test "div-a-bit-complicated" {
+    const field = Field.init(19);
+    const fe0 = field.zero();
+    const fe1 = field.one();
+    const fe2 = FieldElement.init(2, field);
+    const fe4 = FieldElement.init(4, field);
+
+    // Test Case: 2x^2 + 4x + 4 / x + 2 = (quotient = 2x, remainder = 4)
+    try testDivHelper(
+        &[_]FieldElement{fe4, fe4, fe2}, // dividend
+        &[_]FieldElement{fe2, fe1}, // divisor
+        &[_]FieldElement{fe0, fe2}, // quotient
+        &[_]FieldElement{fe4}, // remainder
+    );
+}
+
+fn testDivHelper(
+    dividendCoeffs: []FieldElement, 
+    divisorCoeffs: []FieldElement, 
+    quotientCoeffs: []FieldElement,
+    remainderCoeffs: []FieldElement,
+) !void {
+    const dividend = &(try Polynomial.init(&testing.allocator, dividendCoeffs));
+    defer dividend.deinit();
+
+    const divisor = &(try Polynomial.init(&testing.allocator, divisorCoeffs));
+    defer divisor.deinit();
+
+    const quotient = (try Polynomial.init(&testing.allocator, quotientCoeffs));
+    defer quotient.deinit();
+
+    const remainder = (try Polynomial.init(&testing.allocator, remainderCoeffs));
+    defer remainder.deinit();
+
+    var result = try Polynomial.div(&testing.allocator, dividend, divisor);
+    defer result.?.deinit();
+
+    var expected = Polynomial.divResult{.quotient = quotient, .remainder = remainder};
+    try testing.expect(result.?.eq(&expected));
+}
 
 test "init polynomial" {
     const field = Field.init(19);
@@ -216,6 +403,15 @@ test "degrees-all-zeros" {
     const polynomial = try Polynomial.init(&testing.allocator, fes[0..]);
     defer polynomial.deinit();
     try testing.expect(polynomial.degree() == null);
+}
+
+test "degrees-trailing-zeros" {
+    const field = Field.init(19);
+    const fe0 = field.zero();
+    const fe2 = FieldElement.init(2, field);
+    const polynomial = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe0, fe2, fe0, fe0});
+    defer polynomial.deinit();
+    try testing.expect(polynomial.degree().? == 1);
 }
 
 test "degrees-max-index" {
@@ -480,4 +676,20 @@ fn testExpHelper(expected_coefficients: []FieldElement, exp: i64) !void {
     var expected_poly3 = try Polynomial.init(&testing.allocator, expected_coefficients);
     defer expected_poly3.deinit();
     try testing.expect(expected_poly3.eq(&test_poly3));
+}
+
+/// Returns a slice of integers from start to end (inclusive) that can be iterated over
+/// credit: https://gist.github.com/hazeycode/e7e2d81ea2b5b9137502cfe04541080e
+pub fn range(comptime start: comptime_int, comptime end: comptime_int) []comptime_int {
+    const d: isize = end - start;
+    const d_norm = if (d < 0) -1 else if (d > 0) 1 else 0;
+    const len = (try std.math.absInt(d)) + 1;
+    comptime var i = 0;
+    comptime var n = start;
+    comptime var res: [len]comptime_int = .{undefined} ** len;
+    inline while (i < len) : (i += 1) {
+        res[i] = n;
+        n += d_norm;
+    }
+    return res[0..len];
 }
