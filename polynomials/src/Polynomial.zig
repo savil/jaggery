@@ -196,9 +196,7 @@ const Polynomial = struct {
 
         // Copy over the result coefficients into self. Can probably eliminate this copy
         // by directly using self, instead of result.
-        self.allocator.free(self.coefficients);
-        self.coefficients = try self.allocator.alloc(FieldElement, result.coefficients.len);
-        std.mem.copy(FieldElement, self.coefficients, result.coefficients);
+        try self.writeCoeffs(result.coefficients);
 
         return self;
     }
@@ -233,19 +231,20 @@ const Polynomial = struct {
     // is less than that of the divisor.
     //
     // ownership of the quotient and remainder is passed on to the caller.
-    fn div(allocator: *const Allocator, numerator: *Polynomial, denominator: *Polynomial) !?divResult {
+    fn div(allocator: *const Allocator, numerator: *Polynomial, denominator: *Polynomial) !divResult {
         var denom_degree = denominator.degree();
         if (denom_degree == null) {
-            return null;
+            return error.DivisionByZero;
         }
         var num_degree = numerator.degree();
         if (num_degree == null or num_degree.? < denom_degree.?) {
-            var emptyPoly = try Polynomial.init(allocator, &[_]FieldElement{});
+            var empty_poly = try Polynomial.init(allocator, &[_]FieldElement{});
             // copy the numerator so that the caller owns the new value
-            return divResult.init(emptyPoly, try numerator.copy());
+            return divResult.init(empty_poly, try numerator.copy());
         }
 
         var field = denominator.coefficients[0].field;
+        // remainder:
         var remainder = try Polynomial.init(allocator, numerator.coefficients);
 
         var quotient_coeffs_size = num_degree.? - denom_degree.? + 1;
@@ -281,18 +280,79 @@ const Polynomial = struct {
             _ = try remainder.sub(subtractee);
         }
 
-        var quotient = try Polynomial.init(allocator, quotient_coeffs);
-        return divResult.init(quotient, remainder);
+        var q = try Polynomial.init(allocator, quotient_coeffs);
+        return divResult.init(q, remainder);
+    }
+
+    fn quot(self: *Self, other: *Polynomial) !*Self {
+        var result = try Polynomial.div(self.allocator, self, other);
+        defer result.deinit();
+        try writeCoeffs(self, result.quotient.coefficients);
+        return self;
+    }
+
+    fn rem(self: *Self, other: *Polynomial) !*Self {
+        var result = try Polynomial.div(self.allocator, self, other);
+        defer result.deinit();
+        try writeCoeffs(self, result.remainder.coefficients);
+        return self;
     }
 
     fn copy(self: *Self) !Polynomial {
         return try Polynomial.init(self.allocator, self.coefficients);
     }
+
+    fn writeCoeffs(self: *Self, coeffs: []FieldElement) !void {
+        self.allocator.free(self.coefficients);
+        self.coefficients = try self.allocator.alloc(FieldElement, coeffs.len);
+        std.mem.copy(FieldElement, self.coefficients, coeffs);
+    }
 };
 
-// ugh, this is so ugly. Should:
-// 1. [easy] Refactor into a helper method that actually does the Polynomial.div 
-// 2. [harder] Improve the API so less cumbersome 
+test "quotient" {
+    const field = Field.init(19);
+    const fe0 = field.zero();
+    const fe1 = field.one();
+    const fe2 = FieldElement.init(2, field);
+    const fe4 = FieldElement.init(4, field);
+
+    // Test Case: 2x^2 + 4x + 4 / x + 2 = (quotient = 2x, remainder = 4)
+
+    var dividend = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe4, fe4, fe2}));
+    defer dividend.deinit();    
+
+    var divisor = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe1}));
+    defer divisor.deinit();    
+
+    _ = try dividend.quot(divisor);
+
+    var expectedQuotient = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe0, fe2}));
+    defer expectedQuotient.deinit();
+    try testing.expect(dividend.eq(expectedQuotient));
+}
+
+test "remainder" {
+    const field = Field.init(19);
+    //const fe0 = field.zero();
+    const fe1 = field.one();
+    const fe2 = FieldElement.init(2, field);
+    const fe4 = FieldElement.init(4, field);
+
+    // Test Case: 2x^2 + 4x + 4 / x + 2 = (quotient = 2x, remainder = 4)
+
+    var dividend = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe4, fe4, fe2}));
+    defer dividend.deinit();    
+
+    var divisor = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2, fe1}));
+    defer divisor.deinit();    
+
+    _ = try dividend.rem(divisor);
+
+    var expected_rem = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe4}));
+    defer expected_rem.deinit();
+    try testing.expect(dividend.eq(expected_rem));
+}
+
 test "div-empty" {
     const emptyPoly = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{}));
     defer emptyPoly.deinit();
@@ -301,8 +361,8 @@ test "div-empty" {
     defer emptyPoly2.deinit();
 
     // Test Case: 0 / 0 = null
-    const divResult1 = try Polynomial.div(&testing.allocator, emptyPoly, emptyPoly2);
-    try testing.expectEqual(divResult1, null);
+    var result = Polynomial.div(&testing.allocator, emptyPoly, emptyPoly2);
+    try testing.expectError(error.DivisionByZero, result);
 }
 
 test "div-zero" {
@@ -371,10 +431,10 @@ fn testDivHelper(
     defer remainder.deinit();
 
     var result = try Polynomial.div(&testing.allocator, dividend, divisor);
-    defer result.?.deinit();
+    defer result.deinit();
 
     var expected = Polynomial.divResult{.quotient = quotient, .remainder = remainder};
-    try testing.expect(result.?.eq(&expected));
+    try testing.expect(result.eq(&expected));
 }
 
 test "init polynomial" {
