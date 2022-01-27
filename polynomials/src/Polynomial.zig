@@ -298,6 +298,19 @@ const Polynomial = struct {
         return self;
     }
 
+    fn xor(self: *Self, exponent: i64) !void {
+        if (self.isZero()) {
+            try self.writeCoeffs(&[_]FieldElement{});
+            return;
+        }
+        if (exponent == 0) {
+            try self.writeCoeffs(&[_]FieldElement{self.coefficients[0].field.one()});
+            return;
+        }
+
+        return error.NotImplemented;
+    }
+
     fn copy(self: *Self) !Polynomial {
         return try Polynomial.init(self.allocator, self.coefficients);
     }
@@ -308,6 +321,28 @@ const Polynomial = struct {
         std.mem.copy(FieldElement, self.coefficients, coeffs);
     }
 };
+
+test "xor" {
+    const field = Field.init(19);
+    // const fe0 = field.zero();
+    // const fe1 = field.one();
+    const fe2 = FieldElement.init(2, field);
+    // const fe4 = FieldElement.init(4, field);
+
+    var polyZero = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
+    defer polyZero.deinit();
+    try polyZero.xor(0);
+    try testing.expect(polyZero.isZero());
+
+    var polyTwo = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2});
+    defer polyTwo.deinit();
+    try polyTwo.xor(0);
+    const one: usize = 1;
+    try testing.expectEqual(one, polyTwo.coefficients.len);
+    try testing.expect(polyTwo.coefficients[0].eq(field.one()));
+
+    // Actual implementation is a TODO
+}
 
 test "quotient" {
     const field = Field.init(19);
