@@ -310,6 +310,21 @@ const Polynomial = struct {
         return value;
     }
 
+    // the caller must free the result value
+    //
+    // We explicitly pass in an allocator so that the caller is in charge of the memory.
+    // Otherwise, it would be weird that a value allocator from an allcoator internal to Polynomial
+    // is expected to be freed by the caller using that internal allocator. 
+    fn evaluateDomain(self: *Self, a: *const Allocator, domain: []FieldElement) ![]FieldElement {
+        var results = try a.alloc(FieldElement, domain.len); 
+        var i: usize = 0;
+        for (domain) | val | {
+            results[i] = self.evaluate(val);
+            i += 1;
+        }
+        return results;
+    }
+
     fn copy(self: *Self) !Polynomial {
         return try Polynomial.init(self.allocator, self.coefficients);
     }
@@ -320,6 +335,30 @@ const Polynomial = struct {
         std.mem.copy(FieldElement, self.coefficients, coeffs);
     }
 };
+
+test "evaluateDomain" {
+
+    const field = Field.init(19);
+    //const fe0 = field.zero();
+    const fe1 = field.one();
+    const fe2 = FieldElement.init(2, field);
+    const fe4 = FieldElement.init(4, field);
+    const fe7 = FieldElement.init(7, field);
+    const fe16 = FieldElement.init(16, field);
+
+    var polyDegTwo = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe1, fe2, fe4}));
+    defer polyDegTwo.deinit();
+
+    var values = try polyDegTwo.evaluateDomain(&testing.allocator, &[_]FieldElement{fe1, fe4, fe4});
+    defer testing.allocator.free(values);
+
+    var expectedResults = [_]FieldElement{fe7, fe16, fe16};
+    var i: usize = 0;
+    for (values) | value | {
+        try testing.expect(value.eq(expectedResults[i]));
+        i += 1;
+    }
+}
 
 test "evaluate" {
 
