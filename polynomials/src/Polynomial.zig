@@ -298,17 +298,16 @@ const Polynomial = struct {
         return self;
     }
 
-    fn xor(self: *Self, exponent: i64) !void {
-        if (self.isZero()) {
-            try self.writeCoeffs(&[_]FieldElement{});
-            return;
-        }
-        if (exponent == 0) {
-            try self.writeCoeffs(&[_]FieldElement{self.coefficients[0].field.one()});
-            return;
-        }
+    fn evaluate(self: *Self, point: FieldElement) FieldElement {
 
-        return error.NotImplemented;
+        var x_i = point.field.one();
+        var value = point.field.zero();
+
+        for (self.coefficients) |c| {
+            value = value.add(c.mul(x_i));
+            x_i = x_i.mul(point);
+        }
+        return value;
     }
 
     fn copy(self: *Self) !Polynomial {
@@ -322,26 +321,43 @@ const Polynomial = struct {
     }
 };
 
-test "xor" {
+test "evaluate" {
+
     const field = Field.init(19);
-    // const fe0 = field.zero();
-    // const fe1 = field.one();
+    const fe0 = field.zero();
+    const fe1 = field.one();
     const fe2 = FieldElement.init(2, field);
-    // const fe4 = FieldElement.init(4, field);
+    const fe4 = FieldElement.init(4, field);
+    const fe9 = FieldElement.init(9, field);
+    const fe16 = FieldElement.init(16, field);
 
-    var polyZero = try Polynomial.init(&testing.allocator, &[_]FieldElement{});
-    defer polyZero.deinit();
-    try polyZero.xor(0);
-    try testing.expect(polyZero.isZero());
+    var polyEmpty = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{}));
+    defer polyEmpty.deinit();
+    
+    const resultEmpty = polyEmpty.evaluate(fe4);
+    try testing.expect(resultEmpty.eq(fe0));
 
-    var polyTwo = try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2});
-    defer polyTwo.deinit();
-    try polyTwo.xor(0);
-    const one: usize = 1;
-    try testing.expectEqual(one, polyTwo.coefficients.len);
-    try testing.expect(polyTwo.coefficients[0].eq(field.one()));
+    // polynomial of degree zero
+    var polyDegZero = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe2}));
+    defer polyDegZero.deinit();
 
-    // Actual implementation is a TODO
+    const resultDegZero = polyDegZero.evaluate(fe4);
+    try testing.expect(resultDegZero.eq(fe2));
+
+    // polynomial of degree one
+    var polyDegOne = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe1, fe2}));
+    defer polyDegOne.deinit();
+
+    const resultDegOne = polyDegOne.evaluate(fe4);
+    try testing.expect(resultDegOne.eq(fe9));
+
+    // polynomial of degree two
+    var polyDegTwo = &(try Polynomial.init(&testing.allocator, &[_]FieldElement{fe1, fe2, fe4}));
+    defer polyDegTwo.deinit();
+
+    const resultDegTwo = polyDegTwo.evaluate(fe4);
+    // = 1 + 2x + 4x^2 = 1 + (2)(4) + (4)(4^2) =  73 mod 19 = 16
+    try testing.expect(resultDegTwo.eq(fe16));
 }
 
 test "quotient" {
