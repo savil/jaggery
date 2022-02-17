@@ -8,6 +8,33 @@ const FieldElement = FiniteFields.FieldElement;
 const Field = FiniteFields.Field;
 
 
+
+
+// move to an integer library
+/// Returns a slice of integers from start to end (inclusive) that can be iterated over
+/// from: https://gist.github.com/hazeycode/e7e2d81ea2b5b9137502cfe04541080e
+///
+/// TODO savil: how do slices work in memory? In regular code if I return an array
+/// residing inside a function then that memory would get cleaned up upon function return.
+pub fn range(comptime start: comptime_int, comptime end: comptime_int) []comptime_int {
+    const d: isize = end - start;
+    const d_norm = if (d < 0) -1 else if (d > 0) 1 else 0;
+    const len = (try std.math.absInt(d)) + 1;
+    comptime var i = 0;
+    comptime var n = start;
+    comptime var res: [len]comptime_int = .{undefined} ** len;
+    inline while (i < len) : (i += 1) {
+        res[i] = n;
+        n += d_norm;
+    }
+    return res[0..len];
+}
+
+/// Returns a slice of integers from start (inclusive) to end (exclusive)
+pub fn rangeEx(comptime start: comptime_int, comptime end: comptime_int) []comptime_int {
+    return range(start, end-1);
+}
+
 // TODO savil. If ziglang had varargs, then we could introduce this syntax for constructing
 // the coefficients of the polynomial which are an array of FieldElements.
 //
@@ -22,10 +49,10 @@ const Field = FiniteFields.Field;
 const Polynomial = struct {
     const Self = @This();
 
+    // we need an allocator to store the coefficients in the heap
     allocator: *const Allocator,
     coefficients: []FieldElement,
     
-    // TODO savil: we need an allocator to store the coefficients in the heap
     pub fn init(allocator: *const Allocator, coefficients: []const FieldElement) !Self {
         // make internal copy of coefficients since we own it now
         var coeffs = try allocator.alloc(FieldElement, coefficients.len);
@@ -53,7 +80,7 @@ const Polynomial = struct {
             }
         }
         if (all_zeros) {
-            return null;
+            return null; 
         }
 
         var maxIndex: usize = 0;
@@ -325,6 +352,51 @@ const Polynomial = struct {
         return results;
     }
 
+    fn interpolateDomain(
+        allocator: *Allocator, 
+        domain: []FieldElement, 
+        values: []FieldElement,
+    ) !Polynomial {
+        if (domain.len != values.len) {
+            return error.DomainLenIsNotSameAsValuesLen;
+        }
+        if (domain.len == 0) {
+            return error.DomainLenIsZero;
+        }
+
+        var field = domain[0].field();
+        var acc = try Polynomial.init(allocator, &[_]FieldElement{});
+        defer acc.deinit();
+
+        for (rangeEx(0, domain.len)) | i | {
+            var product = Polynomial.init(allocator, &[_]FieldElement{values[i]});
+            for (rangeEx(0, domain.len)) | j | {
+                if (j == 1) {
+                    continue;
+                }
+                // CODE SMELL: we add x inside this inner loop instead of defining it once outside
+                // because the Polynomial sub function mutates the polynomial it is called upon.
+                // An alternate design may be to have the sub function return a newly allocated polynomial.
+                var x = try Polynomial.init(allocator, &[_]FieldElement{field.zero(), field.one()});
+
+                var polyDomainOfJ = Polynomial.init(allocator, &[_]FieldElement{domain[j]});
+                var polyXMinusDomainOfJ = x.sub(polyDomainOfJ);
+
+                var inverseOfIMinusJ = (domain[i] - domain[j]).inverse();
+                var polyDomainOfIMinusJ = Polynomial.init(allocator, &[_]FieldElement{inverseOfIMinusJ});
+
+                product = product.mul(polyXMinusDomainOfJ.mul(polyDomainOfIMinusJ));
+
+                x.deinit();
+                polyDomainOfJ.deinit();
+                polyDomainOfIMinusJ.deinit();
+            }
+            acc = acc.add(product);
+            product.deinit();
+        }
+
+    }
+
     fn copy(self: *Self) !Polynomial {
         return try Polynomial.init(self.allocator, self.coefficients);
     }
@@ -335,6 +407,18 @@ const Polynomial = struct {
         std.mem.copy(FieldElement, self.coefficients, coeffs);
     }
 };
+
+test "interpolateDomain" {
+    // const field = Field.init(19);
+    // const fe0 = field.zero();
+    // const fe1 = field.one();
+    // const fe2 = FieldElement.init(2, field);
+    // const fe4 = FieldElement.init(4, field);
+    // const fe7 = FieldElement.init(7, field);
+    // const fe16 = FieldElement.init(16, field);
+
+    // Polynomial.interpolateDomain(&[_]FieldElement{});
+}
 
 test "evaluateDomain" {
 
@@ -826,20 +910,4 @@ fn testExpHelper(expected_coefficients: []FieldElement, exp: i64) !void {
     var expected_poly3 = try Polynomial.init(&testing.allocator, expected_coefficients);
     defer expected_poly3.deinit();
     try testing.expect(expected_poly3.eq(&test_poly3));
-}
-
-/// Returns a slice of integers from start to end (inclusive) that can be iterated over
-/// credit: https://gist.github.com/hazeycode/e7e2d81ea2b5b9137502cfe04541080e
-pub fn range(comptime start: comptime_int, comptime end: comptime_int) []comptime_int {
-    const d: isize = end - start;
-    const d_norm = if (d < 0) -1 else if (d > 0) 1 else 0;
-    const len = (try std.math.absInt(d)) + 1;
-    comptime var i = 0;
-    comptime var n = start;
-    comptime var res: [len]comptime_int = .{undefined} ** len;
-    inline while (i < len) : (i += 1) {
-        res[i] = n;
-        n += d_norm;
-    }
-    return res[0..len];
 }
