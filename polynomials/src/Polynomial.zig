@@ -1,3 +1,12 @@
+// TODO savil.
+// - interpolateDomain: write tests
+// - zerofierDomain: implement
+// - scale: implement
+// - testColinearity: implement
+
+
+
+
 const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
